@@ -1,0 +1,316 @@
+---
+title: "Dimensionalidade de votos, ponto ideal  e STF"
+author: "Guilherme Jardim Duarte, Rodrigo Martins"
+output: html_document
+---
+
+Escrevemos este texto para uma compreensão dos métodos de extração de dimensionalidade e estimaçao de ponto ideal utilizados para análise do Supremo Tribunal Federal (Brasil).
+
+Vamos utilizar o R e o pacote knitR para escrever este texto. Assim, vamos carregar os pacotes necessários:
+
+```{r, echo=FALSE, include=FALSE, warning=FALSE, message=FALSE}
+require(ggplot2)
+require(pander)
+require(magrittr)
+library(pscl)
+library(wnominate)
+library(foreign)
+library(gdata)
+require(dplyr)
+library(MASS)
+library(oc)
+panderOptions('table.style', 'rmarkdown')
+```
+
+<br>
+<br>
+
+### Multidimensional Scaling
+
+<br>
+
+O w-Nominate, entre outros métodos de estimação de ponto ideal, deriva de uma série de métodos muito utilizados em psicometria, chamados "MDS" ou Multidimensional Scaling.
+
+O que esses métodos fazem é obter uma matriz de distancias e recriar através dessas um mapa (unidimensional, bidimensional ou tridimensional ) com elas, de forma a se enxergar melhor uma estrutura nos dados. Eles têm muitas aplicações, como análise de respostas a estímulo (cores) e análise espacial de votos na ciência política. 
+
+Vamos exemplificar com uma matriz de distâncias entre cidades na Europa.
+
+
+```{r, results='asis'}
+
+euromat = as.matrix(eurodist)
+panderOptions('table.split.table', Inf)
+euromat %>% pander
+
+```
+
+Com apenas as distâncias, o MDS permite obter a reconstração de um mapa.
+
+```{r, echo=FALSE}
+resultados <- cmdscale(euromat)
+resultados <- data.frame(resultados)
+ggplot(resultados, aes(X1, X2, label=row.names(resultados))) + geom_text(size=2)  + theme_bw()
+```
+
+Repare que o mapa está invertido verticalmente.
+Para recupera-lo, apenas inverteremos a escala da segunda dimensão.
+
+```{r}
+resultados$X2 <- resultados$X2 * (-1)
+ggplot(resultados, aes(X1, X2, label=row.names(resultados))) + geom_text(size=2) + theme_bw()
+
+```
+
+Uma coisa a ser notada é que, dadas as dimensões, é possível alterar a escala, rotacionar ou trasladar o mapa. O que importa é que as raízes das distâncias permaneçam as mesmas. (Isso é importante para entender algumas coisas no NOMINATE)
+
+Na verdade, num tipo de MDS, o ordinal, nem as raízes precisam permanecer, mas apenas a ordem.
+
+
+<br>
+
+<br>
+
+#### Matriz de correlações e distâncias
+
+<br>
+Uma das ideias centrais desses metodos de MDS é que as distâncias podem ser compreendidas como o contrário das correlaçoes.
+
+Por exemplo, no artigo de Fabiana Luci de Oliveira, temos uma matriz de correlações entre ministros do STF.
+
+```{r, echo=FALSE, results='asis'}
+banco <- read.csv("luci.csv", stringsAsFactor=FALSE, header=FALSE)
+
+matr <- banco[-c(1,2)] # let's create a correlation matrix
+
+for (i in 1:dim(matr)[1]) { # it completes the matrix
+  for (j in 1:dim(matr)[2]) {
+    if (is.na(matr[i,j])) {
+      matr[i,j] <- matr[j,i]
+    }
+  }
+}
+banco[19,2] <- "CBO"
+matr <- apply(matr, 1:2, function(x) ifelse(x==999, NA, x)) # It changes 999 by NA
+row.names(matr) <- banco[,1]
+colnames(matr) <- banco[,1]
+matr %>% pander
+```
+
+A partir dessas correlações, considere que a distância é o contrário da correlação. Como o valor máximo de cada correlação é 100% (na escala), as distâncias serão computadas  como 100 - corr.
+Assim
+
+```{r, results='asis'}
+(100 - matr) %>% pander
+```
+
+
+A partir disso, usando um truque para retirar os Missing Values (os NA), substituindo-os pela media da matriz, vamos plotar o MDS dos votos em duas dimensões.
+
+```{r, echo=FALSE, fig.width=12, fig.height=8}
+matr <- (matr * (.01))
+matr <- (1 - matr)
+media_m <- mean(matr, na.rm=TRUE)
+matr <- apply(matr, 1:2, function(x) ifelse(is.na(x), media_m, x))
+matr <- scale(matr)
+results <- cmdscale(matr)
+data_matr <- as.data.frame(matr)
+colnames(data_matr) <- c("X1", "X2")
+ggplot(data_matr, aes(x=X1, y=X2, label = row.names(data_matr) ) ) + geom_text(size=3)
+```
+
+##### Dados do Bernardo Mueller e Pedro Nery Ferrari
+
+Carregando dados NOMINATE
+
+```{r, echo=FALSE, include=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=8}
+bp_dados <- read.csv("VotosTotal.csv", stringsAsFactors=FALSE)
+
+
+retorna_nomi <- function(bd, titulo) {
+  bd <- t(bd)
+  rc.txt <- rollcall(bd[,-1], yea=1, nay=6,    # Format data as rollcall object
+          missing=9,
+          notInLegis=0,
+    legis.names=row.names(bd),
+          desc=titulo,
+    vote.names=colnames(bd[,-1]) 
+  )
+  ipo <- row.names(bd)
+  ipa <- 1
+  for (xow in ipo) {
+    if (xow != "Mendes")
+      ipa <- ipa + 1
+  }
+  result <- wnominate(rc.txt, dims=2, polarity=c(ipa,ipa))  #Run wnominate on rollcall object
+  return(result)
+}
+
+resultado1 <- retorna_nomi(
+  select(
+    select(
+      filter(bp_dados, Period=="I"),
+        -(Period) ), 
+    -(Peluso:Weber) )
+, "1 Periodo")
+
+# LEMBRAR de no resultado2 colocar nomes na mão
+
+
+resultado2 <- retorna_nomi(
+banco <-    select(
+      filter(bp_dados, Period=="II"),
+        -(Period) )[-c(1,2, 7, 15:21)]
+ , "2 Periodo")
+resultado3 <- retorna_nomi(
+banco <-    select(
+      filter(bp_dados, Period=="III"),
+        -(Period) )[-c(1,2, 7,8, 16:21)]
+ ,"3 Periodo")
+
+resultado45 <- retorna_nomi(
+select(
+      filter(bp_dados, Period=="IV" | Period=="V"),
+        -(Period) )[-c(1,2, 5, 7,8, 9,  18, 19, 20, 21)]
+ ,"4 e 5 Periodo")
+
+
+resultado6 <- retorna_nomi(
+select(
+      filter(bp_dados, Period=="VI"),
+        -(Period) )[-c(1,2, 3, 5, 7,8, 9,  19, 20, 21)]
+ ,"6 Periodo")
+
+
+resultado789 <- retorna_nomi(
+select(
+      filter(bp_dados, Period=="VII" | Period=="VIII" | Period=="IX"),
+        -(Period) )[-c(1,2, 3, 5, 7,8, 9,  18)]
+ ,"7, 8 e 9 Periodo")
+
+```
+
+Agora vamos plotar as coordenadas dos vários períodos
+
+
+###### 1 PERIODO
+
+```{r, fig.height=8, fig.width=12}
+plot.coords(resultado1)
+summary(resultado1)
+text(x=(resultado1$legislators)$coord1D, y=(resultado1$legislators)$coord2D, row.names(resultado1$legislators), cex = .8, col = "black")
+plot.scree(resultado1)
+```
+
+###### 2 PERIODO
+
+```{r, fig.height=8, fig.width=12}
+plot.coords(resultado2)
+summary(resultado2)
+text(x=(resultado2$legislators)$coord1D, y=(resultado2$legislators)$coord2D, row.names(resultado2$legislators), cex = .8, col = "black")
+plot.scree(resultado2)
+```
+
+###### 3 PERIODO
+
+```{r, fig.height=8, fig.width=12}
+plot.coords(resultado3)
+summary(resultado3)
+text(x=(resultado3$legislators)$coord1D, y=(resultado3$legislators)$coord2D, row.names(resultado3$legislators), cex = .8, col = "black")
+plot.scree(resultado3)
+```
+
+###### 4º E 5º PERIODOS
+
+```{r, fig.height=8, fig.width=12}
+plot.coords(resultado45)
+summary(resultado45)
+text(x=(resultado45$legislators)$coord1D, y=(resultado45$legislators)$coord2D, row.names(resultado45$legislators), cex = .8, col = "black")
+plot.scree(resultado45)
+```
+
+###### 6º PERIODO
+
+```{r, fig.height=8, fig.width=12}
+plot.coords(resultado6)
+summary(resultado6)
+text(x=(resultado6$legislators)$coord1D, y=(resultado6$legislators)$coord2D, row.names(resultado6$legislators), cex = .8, col = "black")
+plot.scree(resultado6)
+```
+
+###### 7º, 8 E 9º PERIODOS
+
+```{r, fig.height=8, fig.width=12}
+plot.coords(resultado789)
+summary(resultado789)
+text(x=(resultado789$legislators)$coord1D, y=(resultado789$legislators)$coord2D, row.names(resultado789$legislators), cex = .8, col = "black")
+plot.scree(resultado789)
+```
+
+#### Comparação NOMINATE e outros métodos
+
+Vamos utilizar o banco de dados para o primeiro período para replicar as análises utilizando outros métodos.
+
+A grande pergunta é: será que a mudança de modelo altera drasticamente os resultados?
+
+
+Primeiro, vamos plotar o W-NOMINATE para o 1º período.
+
+1 PERIODO
+```{r, fig.height=8, fig.width=12}
+plot.coords(resultado1)
+summary(resultado1)
+text(x=(resultado1$legislators)$coord1D, y=(resultado1$legislators)$coord2D, row.names(resultado1$legislators), cex = .8, col = "black")
+```
+
+Agora vamos testar o MDS Clássico.
+
+```{r, fig.height=8, fig.width=12}
+banco <- select(
+    select(
+      filter(bp_dados, Period=="I"),
+        -(Period) ), 
+    -(Peluso:Weber) )
+
+distancias <- dist(t(banco))
+
+results <- cmdscale(distancias, k=2)
+results <- data.frame(results)
+ggplot(results, aes(X1, X2, label=row.names(results))) + geom_text(size=3)  + theme_bw()
+```
+
+Agora o IsoMDS.
+
+```{r, fig.height=8, fig.width=12}
+results <- isoMDS(distancias) 
+results <- data.frame(results)
+ggplot(results, aes(points.1, points.2, label=row.names(results))) + geom_text(size=3)  + theme_bw()
+
+```
+
+Agora Optimal Classification
+
+```{r, fig.height=8, fig.width=12}
+banco <- select(
+    select(
+      filter(bp_dados, Period=="I"),
+        -(Period) ), 
+    -(Peluso:Weber) )
+
+bd <- t(banco)
+  rc.txt <- rollcall(bd[,-1], yea=1, nay=6,    # Format data as rollcall object
+          missing=9,
+          notInLegis=0,
+    legis.names=row.names(bd),
+          desc="OC",
+    vote.names=colnames(bd[,-1]) 
+  )
+result <- oc(rc.txt, dims=2, polarity=c(11,11))
+summary(result)
+plot.OCcoords(result)
+text(x=result$legislators[,7], y=result$legislators[,8], row.names(result$legislators), cex = .8, col = "black")
+
+```
+
+
+
+
